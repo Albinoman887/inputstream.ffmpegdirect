@@ -896,10 +896,16 @@ bool FFmpegStream::OpenWithFFmpeg(const AVInputFormat* iformat, const AVIOInterr
   // allows internal ffmpeg protocols to be used
   AVDictionary* options = GetFFMpegOptionsFromInput();
 
+  // Add unlimited read ahead limit for caching
+  av_dict_set(&options, "read_ahead_limit", "-1", 0);
+
   CURL url;
   url.Parse(m_streamUrl);
   url.SetProtocolOptions("");
   std::string strFile = url.Get();
+  
+  // Prepend "cache:" to the URL to enable FFmpeg caching protocol
+  strFile = "cache:" + strFile;
 
   int result = -1;
   if (url.IsProtocol("mms"))
