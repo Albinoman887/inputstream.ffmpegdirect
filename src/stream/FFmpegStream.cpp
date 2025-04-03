@@ -899,12 +899,6 @@ bool FFmpegStream::OpenWithFFmpeg(const AVInputFormat* iformat, const AVIOInterr
   // Add unlimited read ahead limit for caching
   av_dict_set(&options, "read_ahead_limit", "-1", 0);
 
-  av_dict_set(&options, "cache", "1", 0);
-  // av_dicdddddddt_set(&options, "reconnect", "1", 0);
-  // av_dict_set(&options, "reconnect_streamed", "1", 0);
-  // av_dict_set(&options, "reconnect_on_network_error", "1", 0);
-  // av_dict_set(&options, "fflags", "+genpts", 0); // Ensure PTS generation if missing
-
   CURL url;
   url.Parse(m_streamUrl);
   url.SetProtocolOptions("");
