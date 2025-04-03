@@ -940,15 +940,15 @@ bool FFmpegStream::OpenWithFFmpeg(const AVInputFormat* iformat, const AVIOInterr
   av_dict_set(&options, "analyzeduration", "10000000", 0);
 
   // Try probing input format if not specified
-  if (!iformat)
-  {
-    if (av_probe_input_buffer(m_ioContext, &iformat, strFile.c_str(), NULL, 0, 0) < 0)
-    {
-      Log(LOGLEVEL_ERROR, "%s - Could not probe input format", __FUNCTION__);
-      av_dict_free(&options);
-      return false;
-    }
-  }
+  // if (!iformat)
+  // {
+  //   if (av_probe_input_buffer(m_ioContext, &iformat, strFile.c_str(), NULL, 0, 0) < 0)
+  //   {
+  //     Log(LOGLEVEL_ERROR, "%s - Could not probe input format", __FUNCTION__);
+  //     av_dict_free(&options);
+  //     return false;
+  //   }
+  // }
 
   if (avformat_open_input(&m_pFormatContext, strFile.c_str(), iformat, &options) < 0)
   {
