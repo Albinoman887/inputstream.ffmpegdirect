@@ -898,6 +898,9 @@ bool FFmpegStream::OpenWithFFmpeg(const AVInputFormat* iformat, const AVIOInterr
 
   // Add unlimited read ahead limit for caching
   av_dict_set(&options, "read_ahead_limit", "-1", 0);
+  av_dict_set(&options, "cache", "1", 0);
+  av_dict_set(&options, "buffer_size", "10485760", 0);
+
 
   CURL url;
   url.Parse(m_streamUrl);
@@ -905,7 +908,7 @@ bool FFmpegStream::OpenWithFFmpeg(const AVInputFormat* iformat, const AVIOInterr
   std::string strFile = url.Get();
   
   // Prepend "cache:" to the URL to enable FFmpeg caching protocol
-  strFile = "cache:" + strFile;
+  // strFile = "cache:" + strFile;
 
   int result = -1;
   if (url.IsProtocol("mms"))
@@ -995,7 +998,7 @@ bool FFmpegStream::OpenWithCURL(const AVInputFormat* iformat)
   {
     seekable = false;
   }
-  int bufferSize = 4096;
+  int bufferSize = 16384;
   int blockSize = m_curlInput->GetBlockSize();
 
   if (blockSize > 1 && seekable) // non seekable input streams are not supposed to set block size
