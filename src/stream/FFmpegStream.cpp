@@ -899,6 +899,12 @@ bool FFmpegStream::OpenWithFFmpeg(const AVInputFormat* iformat, const AVIOInterr
   // Add unlimited read ahead limit for caching
   av_dict_set(&options, "read_ahead_limit", "-1", 0);
 
+  av_dict_set(&options, "cache", "1", 0);
+  av_dicdddddddt_set(&options, "reconnect", "1", 0);
+  av_dict_set(&options, "reconnect_streamed", "1", 0);
+  av_dict_set(&options, "reconnect_on_network_error", "1", 0);
+  av_dict_set(&options, "fflags", "+genpts", 0); // Ensure PTS generation if missing
+
   CURL url;
   url.Parse(m_streamUrl);
   url.SetProtocolOptions("");
@@ -906,6 +912,28 @@ bool FFmpegStream::OpenWithFFmpeg(const AVInputFormat* iformat, const AVIOInterr
   
   // Prepend "cache:" to the URL to enable FFmpeg caching protocol
   strFile = "cache:" + strFile;
+
+  int bufferSize = 10 * 1024 * 1024; // 10 MB read-ahead buffer
+  unsigned char* buffer = (unsigned char*)av_malloc(bufferSize);
+  if (!buffer)
+  {
+    Log(LOGLEVEL_ERROR, "%s - Failed to allocate IO buffer", __FUNCTION__);
+    return false;
+  }
+
+  // Setup custom IOContext with read/seek callbacks if needed
+  m_ioContext = avio_alloc_context(buffer, bufferSize, 0, this, dvd_file_read, NULL, dvd_file_seek);
+  if (!m_ioContext)
+  {
+    av_free(buffer);
+    Log(LOGLEVEL_ERROR, "%s - Failed to create AVIO context", __FUNCTION__);
+    return false;
+  }
+
+  // Attach to the format context
+  m_pFormatContext = avformat_alloc_context();
+  m_pFormatContext->pb = m_ioContext;
+
 
   int result = -1;
   if (url.IsProtocol("mms"))
@@ -960,7 +988,7 @@ bool FFmpegStream::OpenWithFFmpeg(const AVInputFormat* iformat, const AVIOInterr
 
       av_dict_free(&options);
       avformat_close_input(&m_pFormatContext);
-      m_pFormatContext = avformat_alloc_context();
+      // m_pFormatContext = avformat_alloc_context();
     }
 
     m_pFormatContext->interrupt_callback = int_cb;
@@ -990,12 +1018,15 @@ bool FFmpegStream::OpenWithCURL(const AVInputFormat* iformat)
   url.SetProtocolOptions("");
   std::string strFile = url.Get();
 
+    // Prepend "cache:" to the URL to enable FFmpeg caching protocol
+    strFile = "cache:" + strFile;
+
   bool seekable = true;
   if (m_curlInput->Seek(0, SEEK_POSSIBLE) == 0)
   {
     seekable = false;
   }
-  int bufferSize = 4096;
+  int bufferSize = 10 * 1024 * 1024; // 4 MB read-ahead buffer
   int blockSize = m_curlInput->GetBlockSize();
 
   if (blockSize > 1 && seekable) // non seekable input streams are not supposed to set block size
@@ -1133,6 +1164,12 @@ bool FFmpegStream::OpenWithCURL(const AVInputFormat* iformat)
     av_dict_set_int(&options, "channels", channels, 0);
     av_dict_set_int(&options, "sample_rate", samplerate, 0);
   }
+
+  av_dict_set(&options, "cache", "1", 0);
+  av_dict_set(&options, "reconnect", "1", 0);
+  av_dict_set(&options, "reconnect_streamed", "1", 0);
+  av_dict_set(&options, "reconnect_on_network_error", "1", 0);
+
 
   if (avformat_open_input(&m_pFormatContext, strFile.c_str(), iformat, &options) < 0)
   {
@@ -2366,7 +2403,7 @@ AVDictionary* FFmpegStream::GetFFMpegOptionsFromInput()
       // set any of these ffmpeg options
       if (name == "seekable" || name == "reconnect" || name == "reconnect_at_eof" ||
           name == "reconnect_streamed" || name == "reconnect_delay_max" ||
-          name == "icy" || name == "icy_metadata_headers" || name == "icy_metadata_packet" || name == "cenc_decryption_key")
+          name == "icy" || name == "icy_metadata_headers" || name == "icy_metadata_packet" || name == "cenc_decryption_key" || name == "read_ahead_limit")
       {
         Log(LOGLEVEL_DEBUG,
                   "CDVDDemuxFFmpeg::GetFFMpegOptionsFromInput() adding ffmpeg option '%s: %s'",
