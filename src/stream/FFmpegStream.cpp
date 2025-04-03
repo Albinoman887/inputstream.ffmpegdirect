@@ -6,6 +6,7 @@
  */
 
 #include "FFmpegStream.h"
+
 #include "url/URL.h"
 #include "FFmpegLog.h"
 #include "../utils/FilenameUtils.h"
@@ -891,76 +892,95 @@ bool FFmpegStream::OpenWithFFmpeg(const AVInputFormat* iformat, const AVIOInterr
 {
   Log(LOGLEVEL_INFO, "%s - IO handled by FFmpeg's AVFormat", __FUNCTION__);
 
+  // special stream type that makes avformat handle file opening
+  // allows internal ffmpeg protocols to be used
+  AVDictionary* options = GetFFMpegOptionsFromInput();
+
+  // Add unlimited read ahead limit for caching
+  av_dict_set(&options, "read_ahead_limit", "-1", 0);
+
   CURL url;
   url.Parse(m_streamUrl);
   url.SetProtocolOptions("");
   std::string strFile = url.Get();
-  strFile = "cache:" + strFile; // Force caching
+  
+  // Prepend "cache:" to the URL to enable FFmpeg caching protocol
+  strFile = "cache:" + strFile;
 
-  // Allocate IO buffer
-  int bufferSize = 10 * 1024 * 1024; // 10 MB
-  unsigned char* buffer = (unsigned char*)av_malloc(bufferSize);
-  if (!buffer)
+  int result = -1;
+  if (url.IsProtocol("mms"))
   {
-    Log(LOGLEVEL_ERROR, "%s - Failed to allocate IO buffer", __FUNCTION__);
-    return false;
-  }
-
-  // Setup custom IOContext
-  m_ioContext = avio_alloc_context(buffer, bufferSize, 0, this, dvd_file_read, NULL, dvd_file_seek);
-  if (!m_ioContext)
-  {
-    av_free(buffer);
-    Log(LOGLEVEL_ERROR, "%s - Failed to create AVIO context", __FUNCTION__);
-    return false;
-  }
-
-  // Allocate format context and attach buffer
-  m_pFormatContext = avformat_alloc_context();
-  if (!m_pFormatContext)
-  {
-    av_free(buffer);
-    Log(LOGLEVEL_ERROR, "%s - Failed to allocate format context", __FUNCTION__);
-    return false;
-  }
-  m_pFormatContext->pb = m_ioContext;
-  m_pFormatContext->flags |= AVFMT_FLAG_CUSTOM_IO;
-  m_pFormatContext->interrupt_callback = int_cb;
-
-  // Prepare options
-  AVDictionary* options = GetFFMpegOptionsFromInput();
-  av_dict_set(&options, "read_ahead_limit", "-1", 0);
-  av_dict_set(&options, "cache", "1", 0);
-  av_dict_set(&options, "reconnect", "1", 0);
-  av_dict_set(&options, "reconnect_streamed", "1", 0);
-  av_dict_set(&options, "reconnect_on_network_error", "1", 0);
-  av_dict_set(&options, "fflags", "+genpts", 0);
-  av_dict_set(&options, "buffer_size", "10485760", 0);
-  av_dict_set(&options, "probesize", "10000000", 0);
-  av_dict_set(&options, "analyzeduration", "10000000", 0);
-
-  // Try probing input format if not specified
-  if (!iformat)
-  {
-    if (av_probe_input_buffer(m_ioContext, &iformat, strFile.c_str(), NULL, 0, 0) < 0)
+    // try mmsh, then mmst
+    url.SetProtocol("mmsh");
+    url.SetProtocolOptions("");
+    result = avformat_open_input(&m_pFormatContext, url.Get().c_str(), iformat, &options);
+    if (result < 0)
     {
-      Log(LOGLEVEL_ERROR, "%s - Could not probe input format", __FUNCTION__);
+      url.SetProtocol("mmst");
+      strFile = url.Get();
+    }
+  }
+  else if (url.IsProtocol("udp") || url.IsProtocol("rtp"))
+  {
+    std::string strURL = url.Get();
+    Log(LOGLEVEL_DEBUG, "CDVDDemuxFFmpeg::Open() UDP/RTP Original URL '%s'", strURL.c_str());
+    size_t found = strURL.find("://");
+    if (found != std::string::npos)
+    {
+      size_t start = found + 3;
+      found = strURL.find('@');
+
+      if (found != std::string::npos && found > start)
+      {
+        // sourceip found
+        std::string strSourceIp = strURL.substr(start, found - start);
+
+        strFile = strURL.substr(0, start);
+        strFile += strURL.substr(found);
+        if(strFile.back() == '/')
+          strFile.pop_back();
+        strFile += "?sources=";
+        strFile += strSourceIp;
+        Log(LOGLEVEL_DEBUG, "CDVDDemuxFFmpeg::Open() UDP/RTP URL '%s'", strFile.c_str());
+      }
+    }
+  }
+  if (result < 0)
+  {
+    // We only process this condition for manifest streams when this setting is disabled
+    if (!kodi::addon::GetSettingBoolean("useFastOpenForManifestStreams") || m_manifestType.empty())
+    {
+      if (avformat_open_input(&m_pFormatContext, strFile.c_str(), iformat, &options) < 0)
+      {
+        Log(LOGLEVEL_DEBUG, "Error, could not open file %s", CURL::GetRedacted(strFile).c_str());
+        Dispose();
+        av_dict_free(&options);
+        return false;
+      }
+
+      av_dict_free(&options);
+      avformat_close_input(&m_pFormatContext);
+      m_pFormatContext = avformat_alloc_context();
+    }
+
+    m_pFormatContext->interrupt_callback = int_cb;
+    options = GetFFMpegOptionsFromInput();
+    av_dict_set_int(&options, "load_all_variants", 0, AV_OPT_SEARCH_CHILDREN);
+
+    if (avformat_open_input(&m_pFormatContext, strFile.c_str(), iformat, &options) < 0)
+    {
+      Log(LOGLEVEL_DEBUG, "Error, could not open file (2) %s", CURL::GetRedacted(strFile).c_str());
+      Dispose();
       av_dict_free(&options);
       return false;
     }
   }
 
-  if (avformat_open_input(&m_pFormatContext, strFile.c_str(), iformat, &options) < 0)
-  {
-    Log(LOGLEVEL_DEBUG, "Error, could not open file %s", CURL::GetRedacted(strFile).c_str());
-    Dispose();
-    av_dict_free(&options);
-    return false;
-  }
-
   av_dict_free(&options);
+
   return true;
 }
+
 bool FFmpegStream::OpenWithCURL(const AVInputFormat* iformat)
 {
   Log(LOGLEVEL_INFO, "%s - IO handled by Kodi's cURL", __FUNCTION__);
@@ -970,15 +990,12 @@ bool FFmpegStream::OpenWithCURL(const AVInputFormat* iformat)
   url.SetProtocolOptions("");
   std::string strFile = url.Get();
 
-    // Prepend "cache:" to the URL to enable FFmpeg caching protocol
-    strFile = "cache:" + strFile;
-
   bool seekable = true;
   if (m_curlInput->Seek(0, SEEK_POSSIBLE) == 0)
   {
     seekable = false;
   }
-  int bufferSize = 10 * 1024 * 1024; // 4 MB read-ahead buffer
+  int bufferSize = 4096;
   int blockSize = m_curlInput->GetBlockSize();
 
   if (blockSize > 1 && seekable) // non seekable input streams are not supposed to set block size
@@ -1116,12 +1133,6 @@ bool FFmpegStream::OpenWithCURL(const AVInputFormat* iformat)
     av_dict_set_int(&options, "channels", channels, 0);
     av_dict_set_int(&options, "sample_rate", samplerate, 0);
   }
-
-  av_dict_set(&options, "cache", "1", 0);
-  av_dict_set(&options, "reconnect", "1", 0);
-  av_dict_set(&options, "reconnect_streamed", "1", 0);
-  av_dict_set(&options, "reconnect_on_network_error", "1", 0);
-
 
   if (avformat_open_input(&m_pFormatContext, strFile.c_str(), iformat, &options) < 0)
   {
@@ -2355,7 +2366,7 @@ AVDictionary* FFmpegStream::GetFFMpegOptionsFromInput()
       // set any of these ffmpeg options
       if (name == "seekable" || name == "reconnect" || name == "reconnect_at_eof" ||
           name == "reconnect_streamed" || name == "reconnect_delay_max" ||
-          name == "icy" || name == "icy_metadata_headers" || name == "icy_metadata_packet" || name == "cenc_decryption_key" || name == "read_ahead_limit")
+          name == "icy" || name == "icy_metadata_headers" || name == "icy_metadata_packet" || name == "cenc_decryption_key")
       {
         Log(LOGLEVEL_DEBUG,
                   "CDVDDemuxFFmpeg::GetFFMpegOptionsFromInput() adding ffmpeg option '%s: %s'",
